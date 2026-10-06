@@ -1,4 +1,4 @@
-# probe-02: category-level typicality probes on Qwen2.5-7B, layer 20
+# probe-02: category-level typicality probes on Qwen2.5-7B, layer 15
 
 ## Question
 
@@ -18,7 +18,7 @@ See `config.yaml`. The probe method is the same as probe-01 (see
 `experiments/probes/probe-01/README.md`). Differences from probe-01:
 
 - Model: `Qwen/Qwen2.5-7B` (28 layers, d_model 3584).
-- Layers: 20 only (`layers: [20]`). In probe-01, cross-category transfer was
+- Layers: 15 only (`layers: [15]`). In probe-01, cross-category transfer was
   highest at layers 10-20.
 - Activation cache stored as float16 (`<dataset>.float16.npz`, about 52 MB for
   the suite). The analysis converts to float32. float16 caches do not replace
@@ -41,7 +41,7 @@ Copy `outputs/activations/Qwen__Qwen2.5-7B/rosch/` to the same path locally
     uv run python scripts/analysis/run_probes.py \
         experiments/probes/probe-02/config.yaml --cache-only
 
-`--cache-only` stops with an error if a dataset has no cache with layer 20 in
+`--cache-only` stops with an error if a dataset has no cache with layer 15 in
 float16. The local and Colab checkouts must have the same
 `data/processed/rosch/` prompts, or the cache does not match.
 

@@ -9,7 +9,7 @@ train_datasets:
 # data/processed/<suite>/. The train datasets must be in this list.
 eval_datasets: null
 # An explicit layer list replaces layer_start and layer_step.
-layers: [20]
+layers: [15]
 # Cache file dtype. float16 caches are <dataset>.float16.npz. The analysis
 # always uses float32.
 activation_storage_dtype: float16

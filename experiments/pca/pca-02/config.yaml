@@ -1,0 +1,15 @@
+experiment: pca-02
+model: Qwen/Qwen2.5-7B
+suite: rosch
+# null means all datasets in data/processed/<suite>/
+datasets: null
+# An explicit layer list replaces layer_start and layer_step.
+layers: [15]
+# Same float16 cache as probe-02.
+activation_storage_dtype: float16
+n_components: 3
+batch_size: 8
+device: auto
+dtype: auto
+seed: 0
+output_dir: outputs/experiments
