@@ -1,0 +1,14 @@
+experiment: pca-01
+model: Qwen/Qwen2.5-1.5B
+suite: rosch
+# null means all datasets in data/processed/<suite>/
+datasets: null
+# Layers layer_start, layer_start + layer_step, ... up to the last layer.
+layer_start: 5
+layer_step: 5
+n_components: 3
+batch_size: 16
+device: auto
+dtype: auto
+seed: 0
+output_dir: outputs/experiments

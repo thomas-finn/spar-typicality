@@ -11,3 +11,5 @@ wheels/
 
 # OS
 .DS_Store
+# Generated outputs
+outputs/
