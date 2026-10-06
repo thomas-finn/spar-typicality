@@ -1,6 +1,14 @@
-"""Interactive 3D HTML plots of PCA projections."""
+"""Interactive 3D HTML plot of PCA projections for all prompt sets of a suite.
 
-import plotly.graph_objects as go
+The plot is one HTML file. Menus select the prompt set, the Rosch category,
+the layer, the colour mode and whether PC1-3 (3D) or PC1-2 (2D) is shown. A category selection only filters the points;
+the PCA is the one fitted on the full prompt set.
+"""
+
+import html
+import json
+
+import plotly.offline
 
 # Categorical colours, in fixed order. Light mode reference palette.
 SERIES_COLOURS = [
@@ -25,178 +33,348 @@ SEQUENTIAL_BLUE = [
 MUTED = "#898781"
 SURFACE = "#fcfcfb"
 TEXT_PRIMARY = "#0b0b0b"
+TEXT_SECONDARY = "#55534e"
 GRID = "#e1e0d9"
 
 COLOUR_MODES = ["category", "typicality"]
 
 
-def hover_text(row):
-    rating = row["typicality_rating_normalised"]
-    if rating is None:
-        rating_text = "none"
-    else:
-        rating_text = format(rating, ".2f")
-    lines = [
-        row["prompt"],
-        "item: " + row["item"],
-        "category: " + str(row["category"]),
-        "typicality z-score: " + rating_text,
-        "member: " + str(row["is_member"]),
-    ]
-    return "<br>".join(lines)
+def round_list(values, digits=4):
+    return [round(float(value), digits) for value in values]
 
 
-def scatter(projections, indices, rows, name, marker):
-    return go.Scatter3d(
-        x=projections[indices, 0],
-        y=projections[indices, 1],
-        z=projections[indices, 2],
-        mode="markers",
-        name=name,
-        marker=marker,
-        text=[hover_text(rows[index]) for index in indices],
-        hoverinfo="text",
-        visible=False,
-    )
-
-
-def category_traces(projections, rows):
-    """One trace per category for members, and one grey trace for the rest."""
-    categories = sorted(
-        {row["category"] for row in rows if row["category"] is not None}
-    )
-    traces = []
-    for position, category in enumerate(categories):
-        indices = []
-        for index, row in enumerate(rows):
-            if row["category"] == category and row["is_member"] == 1:
-                indices.append(index)
-        marker = {
-            "size": 4,
-            "color": SERIES_COLOURS[position % len(SERIES_COLOURS)],
-            "symbol": SERIES_SYMBOLS[position % len(SERIES_SYMBOLS)],
-            "line": {"width": 0},
-        }
-        traces.append(scatter(projections, indices, rows, category, marker))
-
-    other_indices = []
-    for index, row in enumerate(rows):
-        if row["category"] is None or row["is_member"] != 1:
-            other_indices.append(index)
-    if other_indices:
-        if categories:
-            name = "non-member"
-        else:
-            name = "no category"
-        marker = {"size": 3, "color": MUTED, "symbol": "circle", "opacity": 0.6}
-        traces.append(scatter(projections, other_indices, rows, name, marker))
-    return traces
-
-
-def typicality_traces(projections, rows):
-    """One trace coloured by typicality z-score, and one grey trace for no rating."""
-    rated = []
-    unrated = []
-    for index, row in enumerate(rows):
-        if row["typicality_rating_normalised"] is None:
-            unrated.append(index)
-        else:
-            rated.append(index)
-    traces = []
-    if rated:
-        marker = {
-            "size": 4,
-            "color": [rows[index]["typicality_rating_normalised"] for index in rated],
-            "colorscale": SEQUENTIAL_BLUE,
-            "colorbar": {
-                "title": {"text": "Typicality z-score<br>(low = more typical)"},
-                "thickness": 12,
-            },
-        }
-        traces.append(scatter(projections, rated, rows, "rated", marker))
-    if unrated:
-        marker = {"size": 3, "color": MUTED, "opacity": 0.6}
-        traces.append(scatter(projections, unrated, rows, "no rating", marker))
-    return traces
-
-
-def axis_titles(explained_variance_ratio):
-    titles = []
-    for index, ratio in enumerate(explained_variance_ratio):
-        titles.append("PC" + str(index + 1) + " (" + format(ratio * 100, ".1f") + "%)")
-    return titles
-
-
-def pca_figure(title, rows, results_by_layer):
-    """Return a 3D figure with a menu to select the layer and colour mode.
+def dataset_payload(name, rows, results_by_layer):
+    """Return the plot data of one prompt set.
 
     `results_by_layer` maps a layer to a PcaResult with 3 components.
     """
-    figure = go.Figure()
-    views = []
-    for layer, result in results_by_layer.items():
-        for mode in COLOUR_MODES:
-            if mode == "category":
-                traces = category_traces(result.projections, rows)
-            else:
-                traces = typicality_traces(result.projections, rows)
-            first_trace = len(figure.data)
-            for trace in traces:
-                figure.add_trace(trace)
-            trace_range = range(first_trace, len(figure.data))
-            views.append((layer, mode, trace_range, result))
-
-    buttons = []
-    for layer, mode, trace_range, result in views:
-        visible = [index in trace_range for index in range(len(figure.data))]
-        titles = axis_titles(result.explained_variance_ratio)
-        layout_update = {
-            "title.text": title + " - layer " + str(layer),
-            "scene.xaxis.title.text": titles[0],
-            "scene.yaxis.title.text": titles[1],
-            "scene.zaxis.title.text": titles[2],
-        }
-        buttons.append(
+    payload_rows = []
+    for row in rows:
+        payload_rows.append(
             {
-                "label": "Layer " + str(layer) + " - " + mode,
-                "method": "update",
-                "args": [{"visible": visible}, layout_update],
+                "prompt": row["prompt"],
+                "item": row["item"],
+                "category": row["category"],
+                "z": row["typicality_rating_normalised"],
+                "member": row["is_member"],
             }
         )
-
-    axis_style = {"backgroundcolor": SURFACE, "gridcolor": GRID, "zeroline": False}
-    figure.update_layout(
-        paper_bgcolor=SURFACE,
-        font={"family": "system-ui, -apple-system, sans-serif", "color": TEXT_PRIMARY},
-        scene={"xaxis": axis_style, "yaxis": axis_style, "zaxis": axis_style},
-        legend={"itemsizing": "constant"},
-        margin={"l": 0, "r": 0, "t": 60, "b": 0},
-        updatemenus=[
-            {
-                "buttons": buttons,
-                "direction": "down",
-                "x": 0,
-                "y": 1.08,
-                "xanchor": "left",
-            }
-        ],
-    )
-
-    # Show the first view at load time.
-    first_args = buttons[0]["args"]
-    for index, trace in enumerate(figure.data):
-        trace.visible = first_args[0]["visible"][index]
-    titles = axis_titles(views[0][3].explained_variance_ratio)
-    figure.update_layout(
-        title_text=first_args[1]["title.text"],
-        scene_xaxis_title_text=titles[0],
-        scene_yaxis_title_text=titles[1],
-        scene_zaxis_title_text=titles[2],
-    )
-    return figure
+    layers = {}
+    for layer, result in results_by_layer.items():
+        if len(result.projections) != len(rows):
+            raise ValueError(
+                "Prompt set "
+                + name
+                + " has "
+                + str(len(rows))
+                + " rows but "
+                + str(len(result.projections))
+                + " projections at layer "
+                + str(layer)
+            )
+        layers[str(layer)] = {
+            "projections": [round_list(point) for point in result.projections],
+            "explained": round_list(result.explained_variance_ratio, 6),
+        }
+    return {"name": name, "rows": payload_rows, "layers": layers}
 
 
-def write_html(figure, path):
-    """Write a figure as a standalone HTML file. Plotly is loaded from a CDN."""
+def plot_payload(title, layers, datasets):
+    """Return the data that the HTML page needs.
+
+    `datasets` is a list of (name, rows, results_by_layer).
+    """
+    categories = set()
+    dataset_payloads = []
+    for name, rows, results_by_layer in datasets:
+        for row in rows:
+            if row["category"] is not None:
+                categories.add(row["category"])
+        dataset_payloads.append(dataset_payload(name, rows, results_by_layer))
+    return {
+        "title": title,
+        "layers": [int(layer) for layer in layers],
+        "categories": sorted(categories),
+        "colourModes": COLOUR_MODES,
+        "datasets": dataset_payloads,
+        "style": {
+            "seriesColours": SERIES_COLOURS,
+            "seriesSymbols": SERIES_SYMBOLS,
+            "sequential": SEQUENTIAL_BLUE,
+            "muted": MUTED,
+            "surface": SURFACE,
+            "text": TEXT_PRIMARY,
+            "grid": GRID,
+        },
+    }
+
+
+def script_json(value):
+    """Encode a value as JSON that is safe inside a <script> element."""
+    return json.dumps(value, separators=(",", ":")).replace("</", "<\\/")
+
+
+PAGE_TEMPLATE = """<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>__TITLE__</title>
+<script src="https://cdn.plot.ly/plotly-__PLOTLY_VERSION__.min.js"></script>
+<style>
+  body {
+    margin: 0;
+    background: __SURFACE__;
+    color: __TEXT__;
+    font-family: system-ui, -apple-system, sans-serif;
+  }
+  header { padding: 16px 16px 0; }
+  h1 { font-size: 18px; font-weight: 600; margin: 0 0 12px; }
+  .controls { display: flex; flex-wrap: wrap; gap: 12px 20px; }
+  label {
+    display: flex; flex-direction: column; gap: 4px;
+    font-size: 12px; color: __TEXT_SECONDARY__;
+  }
+  select { font: inherit; font-size: 14px; padding: 4px 6px; min-width: 140px; }
+  #status { font-size: 13px; color: __TEXT_SECONDARY__; margin: 10px 0 0; }
+  #plot { width: 100%; height: calc(100vh - 130px); min-height: 480px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>__TITLE__</h1>
+  <div class="controls">
+    <label>Prompt set <select id="dataset"></select></label>
+    <label>Rosch category <select id="category"></select></label>
+    <label>Layer <select id="layer"></select></label>
+    <label>Colour <select id="mode"></select></label>
+    <label>Components <select id="dims"></select></label>
+  </div>
+  <p id="status"></p>
+</header>
+<div id="plot"></div>
+<script>
+const DATA = __DATA__;
+const STYLE = DATA.style;
+const ALL = "all";
+
+const datasetSelect = document.getElementById("dataset");
+const categorySelect = document.getElementById("category");
+const layerSelect = document.getElementById("layer");
+const modeSelect = document.getElementById("mode");
+const dimsSelect = document.getElementById("dims");
+
+function addOption(select, value, text) {
+  const option = document.createElement("option");
+  option.value = value;
+  option.textContent = text;
+  select.appendChild(option);
+}
+
+DATA.datasets.forEach((dataset, index) => addOption(datasetSelect, index, dataset.name));
+addOption(categorySelect, ALL, "All");
+DATA.categories.forEach((category) => addOption(categorySelect, category, category));
+DATA.layers.forEach((layer) => addOption(layerSelect, layer, "Layer " + layer));
+DATA.colourModes.forEach((mode) => addOption(modeSelect, mode, mode));
+addOption(dimsSelect, 3, "PC1-3 (3D)");
+addOption(dimsSelect, 2, "PC1-2 (2D)");
+
+function hoverText(row) {
+  const rating = row.z === null ? "none" : row.z.toFixed(2);
+  return [
+    row.prompt,
+    "item: " + row.item,
+    "category: " + row.category,
+    "typicality z-score: " + rating,
+    "member: " + row.member,
+  ].join("<br>");
+}
+
+function is3d() {
+  return dimsSelect.value === "3";
+}
+
+function scatter(points, rows, indices, name, marker) {
+  const trace = {
+    type: is3d() ? "scatter3d" : "scatter",
+    mode: "markers",
+    name: name,
+    x: indices.map((index) => points[index][0]),
+    y: indices.map((index) => points[index][1]),
+    text: indices.map((index) => hoverText(rows[index])),
+    hoverinfo: "text",
+    marker: marker,
+  };
+  if (is3d()) {
+    trace.z = indices.map((index) => points[index][2]);
+  } else {
+    // Markers in 2D look smaller than in 3D at the same size.
+    trace.marker = Object.assign({}, marker, { size: marker.size + 2 });
+  }
+  return trace;
+}
+
+function categoryTraces(points, rows, indices) {
+  const traces = [];
+  DATA.categories.forEach((category, position) => {
+    const members = indices.filter(
+      (index) => rows[index].category === category && rows[index].member === 1
+    );
+    if (members.length === 0) return;
+    traces.push(scatter(points, rows, members, category, {
+      size: 4,
+      color: STYLE.seriesColours[position % STYLE.seriesColours.length],
+      symbol: STYLE.seriesSymbols[position % STYLE.seriesSymbols.length],
+      line: { width: 0 },
+    }));
+  });
+  const others = indices.filter(
+    (index) => rows[index].category === null || rows[index].member !== 1
+  );
+  if (others.length > 0) {
+    const name = DATA.categories.length > 0 && rows[others[0]].category !== null
+      ? "non-member" : "no category";
+    traces.push(scatter(points, rows, others, name, {
+      size: 3, color: STYLE.muted, symbol: "circle", opacity: 0.6,
+    }));
+  }
+  return traces;
+}
+
+function typicalityTraces(points, rows, indices) {
+  // The colour range comes from the full prompt set, so that it does not
+  // change when a category is selected.
+  const allRatings = rows.filter((row) => row.z !== null).map((row) => row.z);
+  const rated = indices.filter((index) => rows[index].z !== null);
+  const unrated = indices.filter((index) => rows[index].z === null);
+  const traces = [];
+  if (rated.length > 0) {
+    traces.push(scatter(points, rows, rated, "rated", {
+      size: 4,
+      color: rated.map((index) => rows[index].z),
+      cmin: Math.min(...allRatings),
+      cmax: Math.max(...allRatings),
+      colorscale: STYLE.sequential,
+      colorbar: {
+        title: { text: "Typicality z-score (low = more typical)", side: "right" },
+        thickness: 12,
+        len: 0.8,
+      },
+    }));
+  }
+  if (unrated.length > 0) {
+    traces.push(scatter(points, rows, unrated, "no rating", {
+      size: 3, color: STYLE.muted, opacity: 0.6,
+    }));
+  }
+  return traces;
+}
+
+function axisRange(points, axis) {
+  // The range comes from the full prompt set, so that the axes do not
+  // change when a category is selected.
+  const values = points.map((point) => point[axis]);
+  const low = Math.min(...values);
+  const high = Math.max(...values);
+  const pad = (high - low) * 0.05 || 1;
+  return [low - pad, high + pad];
+}
+
+function axis(title, range) {
+  return {
+    title: { text: title }, range: range,
+    backgroundcolor: STYLE.surface, gridcolor: STYLE.grid, zeroline: false,
+  };
+}
+
+function axis2d(title, range) {
+  return {
+    title: { text: title }, range: range,
+    gridcolor: STYLE.grid, zeroline: false, linecolor: STYLE.grid,
+  };
+}
+
+function render() {
+  const dataset = DATA.datasets[Number(datasetSelect.value)];
+  const hasCategories = dataset.rows.some((row) => row.category !== null);
+  categorySelect.disabled = !hasCategories;
+  if (!hasCategories) categorySelect.value = ALL;
+
+  const category = categorySelect.value;
+  const layer = dataset.layers[layerSelect.value];
+  const rows = dataset.rows;
+  const points = layer.projections;
+  const indices = [];
+  rows.forEach((row, index) => {
+    if (category === ALL || row.category === category) indices.push(index);
+  });
+
+  const traces = modeSelect.value === "category"
+    ? categoryTraces(points, rows, indices)
+    : typicalityTraces(points, rows, indices);
+  const titles = layer.explained.map(
+    (ratio, index) => "PC" + (index + 1) + " (" + (ratio * 100).toFixed(1) + "%)"
+  );
+
+  let status = indices.length + " of " + rows.length + " prompts shown.";
+  if (!hasCategories) status += " This prompt set has no categories.";
+  document.getElementById("status").textContent = status;
+
+  const layout = {
+    paper_bgcolor: STYLE.surface,
+    plot_bgcolor: STYLE.surface,
+    font: { family: "system-ui, -apple-system, sans-serif", color: STYLE.text },
+    // The legend is above the plot, so it does not overlap the colour bar
+    // on the right.
+    legend: {
+      itemsizing: "constant", orientation: "h",
+      x: 0, xanchor: "left", y: 1, yanchor: "bottom",
+    },
+    margin: { l: 0, r: 0, t: 40, b: 0 },
+    uirevision: "keep-view-" + dimsSelect.value,
+  };
+  if (is3d()) {
+    layout.scene = {
+      xaxis: axis(titles[0], axisRange(points, 0)),
+      yaxis: axis(titles[1], axisRange(points, 1)),
+      zaxis: axis(titles[2], axisRange(points, 2)),
+      aspectmode: "cube",
+    };
+  } else {
+    layout.xaxis = axis2d(titles[0], axisRange(points, 0));
+    layout.yaxis = axis2d(titles[1], axisRange(points, 1));
+    layout.margin = { l: 60, r: 0, t: 40, b: 50 };
+  }
+  Plotly.react("plot", traces, layout, { responsive: true });
+}
+
+[datasetSelect, categorySelect, layerSelect, modeSelect, dimsSelect].forEach(
+  (select) => select.addEventListener("change", render)
+);
+render();
+</script>
+</body>
+</html>
+"""
+
+
+def plot_html(payload):
+    """Return the HTML page for a payload from `plot_payload`."""
+    replacements = {
+        "__TITLE__": html.escape(payload["title"]),
+        "__PLOTLY_VERSION__": plotly.offline.get_plotlyjs_version(),
+        "__SURFACE__": SURFACE,
+        "__TEXT_SECONDARY__": TEXT_SECONDARY,
+        "__TEXT__": TEXT_PRIMARY,
+        "__DATA__": script_json(payload),
+    }
+    page = PAGE_TEMPLATE
+    for key, value in replacements.items():
+        page = page.replace(key, value)
+    return page
+
+
+def write_html(payload, path):
+    """Write the plot as a standalone HTML file. Plotly is loaded from a CDN."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    figure.write_html(path, include_plotlyjs="cdn")
+    path.write_text(plot_html(payload))

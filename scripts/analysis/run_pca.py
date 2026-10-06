@@ -26,7 +26,7 @@ from spar_typicality.activations import (
     suite_activations,
 )
 from spar_typicality.pca import fit_pca
-from spar_typicality.pca_plots import pca_figure, write_html
+from spar_typicality.pca_plots import plot_payload, write_html
 from spar_typicality.provenance import provenance
 from spar_typicality.suites import REPO_ROOT, load_suite
 
@@ -96,6 +96,7 @@ def run(config, run_dir):
     )
 
     summary_rows = []
+    plot_datasets = []
     for dataset in datasets:
         results_by_layer = {}
         for position, layer in enumerate(layers):
@@ -110,10 +111,13 @@ def run(config, run_dir):
         save_pca_results(
             run_dir / "pca" / (dataset.name + ".npz"), layers, results_by_layer
         )
-        title = dataset.name + " - " + config["model"]
-        figure = pca_figure(title, dataset.rows, results_by_layer)
-        write_html(figure, run_dir / "html" / (dataset.name + ".html"))
-        print("Wrote plot for", dataset.name)
+        plot_datasets.append((dataset.name, dataset.rows, results_by_layer))
+
+    title = config["experiment"] + " - " + config["model"] + " - " + config["suite"]
+    write_html(
+        plot_payload(title, layers, plot_datasets), run_dir / "html" / "pca.html"
+    )
+    print("Wrote plot to", run_dir / "html" / "pca.html")
 
     with open(run_dir / "explained_variance.csv", "w", newline="") as file:
         writer = csv.DictWriter(file, fieldnames=list(summary_rows[0].keys()))

@@ -7,8 +7,8 @@ from spar_typicality.activations import (
     save_activations,
     select_layers,
 )
-from spar_typicality.pca import fit_pca
-from spar_typicality.pca_plots import pca_figure
+from spar_typicality.pca import fit_pca, load_pca_results
+from spar_typicality.pca_plots import plot_html, plot_payload
 from spar_typicality.suites import load_suite
 
 
@@ -64,15 +64,54 @@ def test_fit_pca_finds_main_direction():
     assert ratios[0] >= ratios[1] >= ratios[2]
 
 
-def test_load_suite_and_figure():
+def test_load_suite_and_plot():
     datasets = load_suite("rosch", dataset_names=["rosch_example", "rosch_neutral"])
     assert [dataset.name for dataset in datasets] == ["rosch_example", "rosch_neutral"]
     rng = np.random.default_rng(0)
+    plot_datasets = []
     for dataset in datasets:
         assert dataset.prompts()[0].endswith(".")
         matrix = rng.normal(size=(len(dataset.rows), 8))
         results = {5: fit_pca(matrix), 10: fit_pca(matrix)}
-        figure = pca_figure(dataset.name, dataset.rows, results)
-        visible = [trace for trace in figure.data if trace.visible]
-        assert len(visible) > 0
-        assert len(figure.layout.updatemenus[0].buttons) == 4
+        plot_datasets.append((dataset.name, dataset.rows, results))
+
+    payload = plot_payload("test", [5, 10], plot_datasets)
+    assert payload["layers"] == [5, 10]
+    assert "bird" in payload["categories"]
+    assert None not in payload["categories"]
+    assert [dataset["name"] for dataset in payload["datasets"]] == [
+        "rosch_example",
+        "rosch_neutral",
+    ]
+    example = payload["datasets"][0]
+    assert len(example["layers"]["5"]["projections"]) == len(example["rows"])
+
+    page = plot_html(payload)
+    assert page.count("<script>") == 1
+    assert '"rosch_neutral"' in page
+
+
+def test_plot_payload_rejects_wrong_row_count():
+    datasets = load_suite("rosch", dataset_names=["rosch_example"])
+    matrix = np.random.default_rng(0).normal(size=(3, 8))
+    with pytest.raises(ValueError):
+        plot_payload(
+            "test", [5], [("rosch_example", datasets[0].rows, {5: fit_pca(matrix)})]
+        )
+
+
+def test_pca_results_round_trip(tmp_path):
+    matrix = np.random.default_rng(0).normal(size=(20, 6))
+    result = fit_pca(matrix)
+    path = tmp_path / "pca.npz"
+    np.savez(
+        path,
+        layers=np.array([5]),
+        projections=result.projections[None],
+        components=result.components[None],
+        explained_variance_ratio=result.explained_variance_ratio[None],
+        mean=result.mean[None],
+    )
+    loaded = load_pca_results(path)
+    assert list(loaded.keys()) == [5]
+    assert np.allclose(loaded[5].projections, result.projections)

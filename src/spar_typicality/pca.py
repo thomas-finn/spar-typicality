@@ -38,3 +38,20 @@ def fit_pca(matrix, n_components=3):
     explained_variance_ratio = variances[:n_components] / variances.sum()
     projections = centred @ components.T
     return PcaResult(mean, components, explained_variance_ratio, projections)
+
+
+def load_pca_results(path):
+    """Load a file written by `save_pca_results` in scripts/analysis/run_pca.py.
+
+    Returns a dict that maps a layer to a PcaResult.
+    """
+    data = np.load(path)
+    results_by_layer = {}
+    for position, layer in enumerate(data["layers"]):
+        results_by_layer[int(layer)] = PcaResult(
+            data["mean"][position],
+            data["components"][position],
+            data["explained_variance_ratio"][position],
+            data["projections"][position],
+        )
+    return results_by_layer

@@ -41,8 +41,15 @@ config. To only extract and cache activations:
   - `metadata.json`: config, seed, git commit, environment, status
   - `explained_variance.csv`: explained variance ratio of PC1-3 per dataset and layer
   - `pca/<dataset>.npz`: projections, components, means per layer
-  - `html/<dataset>.html`: 3D plot; the menu selects the layer and the colour
-    mode (category or typicality z-score). The plots load plotly from a CDN.
+  - `html/pca.html`: one plot for all prompt sets. Menus select the prompt
+    set, the Rosch category (or all), the layer, the colour mode (category or
+    typicality z-score) and the components (PC1-3 in 3D or PC1-2 in 2D). A
+    category selection only filters the points; the PCA is the one fitted on
+    the full prompt set. The plot loads plotly from a CDN.
+
+To write the plot again for an existing run, without loading the model:
+
+    uv run python scripts/analysis/plot_pca.py outputs/experiments/<run_id>
 
 ## Result
 
