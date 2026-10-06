@@ -101,3 +101,9 @@ downloading large artifacts.
 
 Activations and other large tensors should only be persisted when required
 by the experiment.
+
+## Code conventions
+
+ - Use simplified technical English by the ASD-STE100 standard
+ - Lean towards human readable code rather than pythonic 
+ - Lean towards being less verbose in code comments

@@ -1,0 +1,7 @@
+{
+  "raw_data": "data/raw/rosch1975_ratings.csv",
+  "n_member_pairs": 565,
+  "n_random_pairs": 100,
+  "seed": 0,
+  "git_commit": "daad995b4cc338aa5e78df556499a88d7468eadf"
+}
