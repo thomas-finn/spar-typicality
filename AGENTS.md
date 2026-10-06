@@ -62,6 +62,9 @@ An experiment should contain:
 - `README.md`
 - results should go under `outputs/`, not inside the experiment directory
 
+Each experiment must have a row in `experiments/experiments.md`. Add the row
+when the experiment is created and update it after each run.
+
 The experiment README should record:
 
 - hypothesis/question

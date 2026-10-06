@@ -15,6 +15,10 @@ from spar_typicality.suites import REPO_ROOT
 
 ACTIVATIONS_DIR = REPO_ROOT / "outputs" / "activations"
 
+# Activations are always computed in float32 or the model dtype, and always
+# returned as float32. The storage dtype only changes the cache file.
+STORAGE_DTYPES = ["float32", "float16"]
+
 
 def select_layers(num_layers, start, step):
     """Return the layers start, start + step, ... that are <= num_layers."""
@@ -23,6 +27,31 @@ def select_layers(num_layers, start, step):
             "Start layer " + str(start) + " is not in 1.." + str(num_layers)
         )
     return list(range(start, num_layers + 1, step))
+
+
+def config_layers(config, num_layers):
+    """Return the layers of an experiment config.
+
+    The config gives either an explicit list `layers`, or `layer_start` and
+    `layer_step`.
+    """
+    layers = config.get("layers")
+    if layers is None:
+        return select_layers(num_layers, config["layer_start"], config["layer_step"])
+    for layer in layers:
+        if layer < 1 or layer > num_layers:
+            raise ValueError("Layer " + str(layer) + " is not in 1.." + str(num_layers))
+    return sorted(layers)
+
+
+def check_storage_dtype(storage_dtype):
+    if storage_dtype not in STORAGE_DTYPES:
+        raise ValueError(
+            "Storage dtype must be one of "
+            + str(STORAGE_DTYPES)
+            + ", not "
+            + repr(storage_dtype)
+        )
 
 
 def final_period_token_index(prompt, offsets):
@@ -49,17 +78,43 @@ def cache_dir(model_name, suite, activations_dir=ACTIVATIONS_DIR):
     return Path(activations_dir) / model_slug(model_name) / suite
 
 
-def cache_path(model_name, suite, dataset_name, activations_dir=ACTIVATIONS_DIR):
-    return cache_dir(model_name, suite, activations_dir) / (dataset_name + ".npz")
+def cache_path(
+    model_name,
+    suite,
+    dataset_name,
+    activations_dir=ACTIVATIONS_DIR,
+    storage_dtype="float32",
+):
+    """Return the cache file of a dataset.
+
+    float32 caches are <dataset>.npz. Other storage dtypes get their own file,
+    for example <dataset>.float16.npz, so they do not replace a float32 cache.
+    """
+    check_storage_dtype(storage_dtype)
+    name = dataset_name
+    if storage_dtype != "float32":
+        name = name + "." + storage_dtype
+    return cache_dir(model_name, suite, activations_dir) / (name + ".npz")
 
 
-def save_activations(path, activations, layers, prompts, token_indices):
+def save_activations(
+    path, activations, layers, prompts, token_indices, storage_dtype="float32"
+):
     """Save activations with shape (n_prompts, n_layers, d_model)."""
+    check_storage_dtype(storage_dtype)
+    # Overflow is checked below, so the cast warning is not necessary.
+    with np.errstate(over="ignore"):
+        stored = np.asarray(activations).astype(storage_dtype)
+    if not np.all(np.isfinite(stored)):
+        raise ValueError(
+            "Activations are not finite in " + storage_dtype + ". Values can be "
+            "larger than the float16 range; use float32 storage."
+        )
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     np.savez(
         path,
-        activations=activations,
+        activations=stored,
         layers=np.array(layers),
         prompts=np.array(prompts),
         token_indices=np.array(token_indices),
@@ -67,7 +122,10 @@ def save_activations(path, activations, layers, prompts, token_indices):
 
 
 def load_activations(path):
-    """Return a dict with the keys activations, layers, prompts, token_indices."""
+    """Return a dict with the keys activations, layers, prompts, token_indices.
+
+    The activations have the dtype of the file.
+    """
     with np.load(path) as data:
         return {
             "activations": data["activations"],
@@ -81,7 +139,7 @@ def load_cached_layers(path, prompts, layers):
     """Return cached activations for `layers`, or None if the cache is not usable.
 
     The cache is usable if it has the same prompts and has all `layers`.
-    The result has shape (n_prompts, len(layers), d_model).
+    The result has shape (n_prompts, len(layers), d_model) and dtype float32.
     """
     if not Path(path).exists():
         return None
@@ -93,7 +151,7 @@ def load_cached_layers(path, prompts, layers):
         if layer not in cached["layers"]:
             return None
         positions.append(cached["layers"].index(layer))
-    return cached["activations"][:, positions, :]
+    return cached["activations"][:, positions, :].astype(np.float32)
 
 
 def pick_device(device):
@@ -195,16 +253,25 @@ def suite_activations(
     overwrite=False,
     activations_dir=ACTIVATIONS_DIR,
     extra_metadata=None,
+    storage_dtype="float32",
+    cache_only=False,
 ):
     """Return {dataset name: activations} and use the cache when possible.
 
-    The model is only loaded if a dataset is not in the cache.
-    Each array has shape (n_prompts, len(layers), d_model).
+    The model is only loaded if a dataset is not in the cache. If
+    `cache_only` is True, a dataset that is not in the cache is an error and
+    the model is never loaded.
+    Each array has shape (n_prompts, len(layers), d_model) and dtype float32.
     """
+    check_storage_dtype(storage_dtype)
+    if cache_only and overwrite:
+        raise ValueError("cache_only and overwrite cannot both be True.")
     results = {}
     missing = []
     for dataset in datasets:
-        path = cache_path(model_name, suite, dataset.name, activations_dir)
+        path = cache_path(
+            model_name, suite, dataset.name, activations_dir, storage_dtype
+        )
         cached = None
         if not overwrite:
             cached = load_cached_layers(path, dataset.prompts(), layers)
@@ -214,18 +281,43 @@ def suite_activations(
             print("Cache hit:", path)
             results[dataset.name] = cached
 
+    if missing and cache_only:
+        lines = []
+        for dataset in missing:
+            path = cache_path(
+                model_name, suite, dataset.name, activations_dir, storage_dtype
+            )
+            lines.append("  " + str(path))
+        raise FileNotFoundError(
+            "No usable cache (layers "
+            + str(layers)
+            + ", storage dtype "
+            + storage_dtype
+            + ") for:\n"
+            + "\n".join(lines)
+            + "\nThe model is not loaded because cache_only is set."
+        )
+
     if missing:
         model, tokenizer, device = load_model(model_name, device, dtype)
         for dataset in missing:
-            path = cache_path(model_name, suite, dataset.name, activations_dir)
+            path = cache_path(
+                model_name, suite, dataset.name, activations_dir, storage_dtype
+            )
             print("Extracting", dataset.name, "to", path)
             activations, token_indices = extract_activations(
                 model, tokenizer, device, dataset.prompts(), layers, batch_size
             )
             save_activations(
-                path, activations, layers, dataset.prompts(), token_indices
+                path,
+                activations,
+                layers,
+                dataset.prompts(),
+                token_indices,
+                storage_dtype,
             )
-            results[dataset.name] = activations
+            # Round as the cache does, so a rerun from the cache is the same.
+            results[dataset.name] = activations.astype(storage_dtype).astype(np.float32)
 
         metadata = {
             "model": model_name,
@@ -237,6 +329,7 @@ def suite_activations(
             "hidden_size": model.config.hidden_size,
             "device": device,
             "dtype": str(model.dtype),
+            "storage_dtype": storage_dtype,
             "datasets_extracted_last": [dataset.name for dataset in missing],
         }
         if extra_metadata is not None:

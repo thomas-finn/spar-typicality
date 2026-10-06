@@ -11,7 +11,6 @@ Usage:
 
 import argparse
 import csv
-import json
 import random
 import time
 from pathlib import Path
@@ -20,45 +19,15 @@ import numpy as np
 import yaml
 
 from spar_typicality.activations import (
+    config_layers,
     model_num_layers,
-    model_slug,
-    select_layers,
     suite_activations,
 )
 from spar_typicality.pca import fit_pca
 from spar_typicality.pca_plots import plot_payload, write_html
 from spar_typicality.provenance import provenance
-from spar_typicality.suites import REPO_ROOT, load_suite
-
-
-def read_config(path, overrides):
-    with open(path) as file:
-        config = yaml.safe_load(file)
-    for key, value in overrides.items():
-        if value is not None:
-            config[key] = value
-    return config
-
-
-def make_run_dir(config):
-    timestamp = time.strftime("%Y%m%d-%H%M%S")
-    run_id = (
-        config["experiment"]
-        + "_"
-        + model_slug(config["model"])
-        + "_"
-        + config["suite"]
-        + "_"
-        + timestamp
-    )
-    run_dir = REPO_ROOT / config["output_dir"] / run_id
-    run_dir.mkdir(parents=True, exist_ok=False)
-    return run_id, run_dir
-
-
-def write_metadata(run_dir, metadata):
-    with open(run_dir / "metadata.json", "w") as file:
-        json.dump(metadata, file, indent=2)
+from spar_typicality.runs import make_run_dir, read_config, write_metadata
+from spar_typicality.suites import load_suite
 
 
 def save_pca_results(path, layers, results_by_layer):
@@ -75,13 +44,11 @@ def save_pca_results(path, layers, results_by_layer):
     )
 
 
-def run(config, run_dir):
+def run(config, run_dir, cache_only=False):
     random.seed(config["seed"])
     np.random.seed(config["seed"])
 
-    layers = select_layers(
-        model_num_layers(config["model"]), config["layer_start"], config["layer_step"]
-    )
+    layers = config_layers(config, model_num_layers(config["model"]))
     print("Layers:", layers)
     datasets = load_suite(config["suite"], dataset_names=config.get("datasets"))
     activations = suite_activations(
@@ -93,6 +60,8 @@ def run(config, run_dir):
         device=config["device"],
         dtype=config["dtype"],
         extra_metadata=provenance(),
+        storage_dtype=config.get("activation_storage_dtype", "float32"),
+        cache_only=cache_only,
     )
 
     summary_rows = []
@@ -131,6 +100,11 @@ def main():
     parser.add_argument("config", type=Path)
     parser.add_argument("--model", default=None)
     parser.add_argument("--suite", default=None)
+    parser.add_argument(
+        "--cache-only",
+        action="store_true",
+        help="Fail if activations are not cached. Never load the model.",
+    )
     args = parser.parse_args()
 
     config = read_config(args.config, {"model": args.model, "suite": args.suite})
@@ -147,6 +121,7 @@ def main():
         "config": config,
         "seed": config["seed"],
         "status": "running",
+        "cache_only": args.cache_only,
         "started": time.strftime("%Y-%m-%dT%H:%M:%S"),
     }
     metadata.update(provenance())
@@ -154,7 +129,7 @@ def main():
     print("Run directory:", run_dir)
 
     try:
-        metadata["layers"] = run(config, run_dir)
+        metadata["layers"] = run(config, run_dir, cache_only=args.cache_only)
         metadata["status"] = "completed"
     except BaseException:
         metadata["status"] = "failed"

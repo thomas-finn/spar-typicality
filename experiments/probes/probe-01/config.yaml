@@ -1,0 +1,27 @@
+experiment: probe-01
+model: Qwen/Qwen2.5-1.5B
+suite: rosch
+# Probes are fitted on each of these datasets, separately.
+train_datasets:
+  - rosch_label
+  - rosch_example
+# Datasets that are projected onto each probe. null means all datasets in
+# data/processed/<suite>/. The train datasets must be in this list.
+eval_datasets: null
+# Layers layer_start, layer_start + layer_step, ... up to the last layer.
+layer_start: 5
+layer_step: 5
+probe_types:
+  - diff_means
+  - ridge
+# Difference of means: mean of the most typical fraction minus mean of the
+# least typical fraction of the member rows of a category.
+diff_means_fraction: 0.3333333333333333
+# Ridge: alpha = factor * mean squared row norm of the centred activations.
+# The factor with the lowest leave-one-out error is selected per probe.
+ridge_alpha_factors: [0.0001, 0.0003, 0.001, 0.003, 0.01, 0.03, 0.1, 0.3, 1.0, 3.0, 10.0, 30.0, 100.0]
+batch_size: 16
+device: auto
+dtype: auto
+seed: 0
+output_dir: outputs/experiments
